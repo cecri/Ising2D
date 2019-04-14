@@ -1,0 +1,9 @@
+[package]
+name = "Wolff"
+version = "0.1.0"
+authors = ["cecri"]
+edition = "2018"
+
+[dependencies]
+rand = "0.6"
+

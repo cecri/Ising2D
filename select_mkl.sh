@@ -1,0 +1,5 @@
+export CARGO_FEATURE_SYSTEM_MKL=1
+export CARGO_FEATURE_EXCLUDE_LAPACKE=1
+export CARGO_FEATURE_EXCLUDE_CBLAS=1
+
+export CARGO_FEATURES="--no-default-features --features mkl"

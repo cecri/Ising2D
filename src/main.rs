@@ -1,123 +1,164 @@
-use std::vec;
+extern crate nalgebra as na;
+extern crate itertools;
+extern crate itertools_num;
+extern crate nalgebra_lapack as nala;
+extern crate scoped_threadpool;
 
+mod Ising;
+mod Machines;
+use std::error::Error;
+use Machines::{Machine, Utility, coeffs};
 
-mod Ising {
+fn machine_exact_energy<T: Ising::Model, U: Machines::Machine>(ising: &T, rbm: &U) -> f64 {
+    let cfs = coeffs(rbm, true);
+    let mut energy: f64 = 0.0;
 
-    pub trait Model {
-        fn neighbors(&self, n: u32) -> Vec<u32>;
-        fn size(&self) -> u32;
+    for i in 0..cfs.len() {
+        let conf = Utility::to_sigma(rbm.get_num_visible(), i as u32);
+        let e = ising.energy(&conf);
+        energy += cfs[i].powi(2)*e;
+    }
+    energy
+}
+fn ising_exact_prob<T: Ising::Model>(ising: &T, beta: f64) -> Vec<f64> {
+    let n = ising.size();
+    let dim = 1<<n;
+    
+    let mut prob: Vec<f64> = Vec::new();
+    for i in 0..dim {
+        let conf = Utility::to_sigma(n, i as u32);
+        let e = ising.energy(&conf);
+        prob.push((-beta*e).exp());
+    }
+    let s: f64 = prob.iter().sum();
+
+    let res: Vec<f64> = prob.iter().map(|x| x/s).collect();
+    res
+}
+
+fn sampled_energy<T: Ising::Model>(model: &T, samples: &Vec<Vec<i8>>) -> f64 {
+    let egs : Vec<f64> = samples.iter().map(|x| model.energy(x) ).collect();
+    egs.iter().sum::<f64>() / (egs.len() as f64)
+}
+fn sampled_mag<T: Ising::Model>(model: &T, samples: &Vec<Vec<i8>>) -> f64 {
+    let mgs : Vec<f64> = samples.iter().map(|x| model.magnetization(x).abs() ).collect();
+    mgs.iter().sum::<f64>() / (mgs.len() as f64)
+}
+
+fn ising_sample<T: Ising::Model>(model: &T, beta: f64, nsmp: usize) -> Vec<Vec<i8> > {
+    let mut res: Vec<Vec<i8> > = Vec::new();
+    let mut ws = Ising::WolffSampler::new(model, beta);
+
+    for _j in 0..100 {
+        ws.sweep();
     }
 
-    pub struct Ising2D {
-        pub n1: u32,
-        pub n2: u32,
+    for _i in 0..nsmp {
+        res.push(ws.getConf().to_vec());
+        ws.sweep();
     }
-    pub struct WolffSampler<'a, T: Model> {
-        model: &'a T,
-        beta: f64,
-        conf: Vec<i8>,
-    }
+    res
+}
 
-    impl Model for Ising2D{
-        fn size(&self) -> u32 {
-            self.n1 * self.n2
-        }
-        fn neighbors(&self, n : u32) -> Vec<u32> {
-            let mut res : Vec<u32> = Vec::new();
-            res.push(n + self.n1);
-            if n > self.n1 {
-                res.push(n - self.n1);
-            }
-            res.push(n + 1);
-            if n > 1 {
-                res.push(n - 1);
-            }
-            
-            res.retain(|&i| i < self.size());
-            res
-        }
-    }
+struct SmatrixBuilder {
+    pub g2 : na::DMatrix<f64>,
+    pub g : na::DVector<f64>,
+}
 
-    impl<'a, T: Model> WolffSampler<'a, T> {
-        pub fn new (model: &'a T, beta: f64) -> WolffSampler <'a, T> {
-            use rand::distributions::Uniform;
-            use rand::prelude::*;
+fn corr_fn(idx0: usize, idx1: usize, samples: &Vec<Vec<i8>>) -> f64
+{
+    let nsmp = samples.len() as f64;
+    let two_points: i32 = samples.iter().map(|x| (x[idx0]*x[idx1]) as i32).sum();
+    let one_points0: i32 = samples.iter().map(|x| x[idx0] as i32).sum();
+    let one_points1: i32 = samples.iter().map(|x| x[idx1] as i32).sum();
 
-            let dist = Uniform::from(0..2);
-            let mut rng = rand::thread_rng();
+    f64::from(two_points)/nsmp - f64::from(one_points0)/nsmp*f64::from(one_points1)/nsmp
+}
 
-            let n = model.size() as usize;
-            let mut conf : Vec<i8> = Vec::with_capacity(n);
-
-            for _i in 0..n {
-                conf.push( 1 - 2*dist.sample(&mut rng) );
-            }
-
-            WolffSampler {
-                model,
-                beta,
-                conf, 
-            }
-        }
+impl SmatrixBuilder {
+    fn construct_from_samples<T: Machine + Sync>(machine: &T, samples: &Vec<Vec<i8> >) -> SmatrixBuilder {
+        use na::{DMatrix, DVector};
+        use std::ops::AddAssign;
+        use scoped_threadpool::Pool;
+        use std::ptr::copy_nonoverlapping;
         
-        pub fn size(&self) -> u32 {
-            self.model.size()
+        let dim = machine.get_dim() as usize;
+        let n_smp = samples.len();
+        let mut gs: DMatrix<f64> = DMatrix::zeros(dim, n_smp);
+        
+        let mut pool = Pool::new(4);
+        
+        pool.scoped(|scoped| {
+            for (i, mut col) in gs.column_iter_mut().enumerate(){
+                scoped.execute(move || {
+                    let sigma = na::DVector::<i8>::from_vec(samples[i].clone());
+                    let src = machine.partial_der(&sigma);
+                    col += src;
+                });
+            } //for
+        });
+
+        let mut g2 = &gs*gs.transpose();
+        g2 /= f64::from(n_smp as u32);
+
+        SmatrixBuilder {
+            g2,
+            g : gs.column_mean()
         }
+    }
 
-        pub fn getConf(&self) -> &Vec<i8> {
-            & self.conf
-        }
-
-        pub fn sweep (&mut self) {
-            use std::collections::VecDeque;
-            use rand::distributions::Uniform;
-            use rand::prelude::*;
-
-            let mut cluster : Vec<u32> = Vec::new();
-            let mut queue: VecDeque<u32> = VecDeque::new();
-
-
-            let n = self.model.size();
-            let idx_dist = Uniform::from(0..n);
-            let p_dist : Uniform<f64> = Uniform::from(0.0..1.0);
-            let mut rng = rand::thread_rng();
-
-            let prob = 1.0 - self.beta.exp();
-            
-            let k = idx_dist.sample(&mut rng);
-            queue.push_back(k);
-            println!("{}", k);
-            
-            while let Some(k) = queue.pop_front() {
-                cluster.push(k);
-                for x in self.model.neighbors(k) {
-                    if self.conf[k as usize] == self.conf[x as usize] {
-                        //push x with probability p = 1-exp(-2*beta)
-                        if p_dist.sample(&mut rng) < prob
-                        {
-                            queue.push_back(x);
-                        }
-                    }
-                }
-            }
-
-            for x in cluster {
-                self.conf[x as usize] *= -1;
-            }
-        }
+    fn get_smat(&self) -> na::DMatrix<f64> {
+        let mut res = self.g2.clone();
+        res -= &self.g*self.g.transpose();
+        res
     }
 }
 
-fn main() {
-    use Ising;
-    let ising2D = Ising::Ising2D {
-        n1: 5,
-        n2: 5,
+fn main() -> Result<(), Box<dyn Error>>{
+    use Ising::{Model, Ising2D};
+    use Machines::{Machine, RBM, coeffs};
+    use core::cmp::max;
+    use std::fs::File;
+    use std::io::Write;
+
+    
+    let ising2D = Ising2D {
+        n1: 8,
+        n2: 8,
     };
 
-    let mut ws = Ising::WolffSampler::new(&ising2D, 0.1);
 
-    println!("{:?}", ws.getConf());
-    ws.sweep();
-    println!("{:?}", ws.getConf());
+    let nsmp: usize = 10000;
+
+    let betas = itertools_num::linspace(0.01, 1.0, 100);
+
+    for beta in betas {
+        let smps = ising_sample(&ising2D, beta, nsmp);
+
+        let filename = format!("Corr_{:03}.dat", (beta*100.0) as u32);
+        let mut file = File::create(filename).unwrap();
+        for i in 1..8 {
+            let corr = corr_fn(0, ising2D.to_idx(i, i) as usize, &smps);
+            write!(&mut file, "{}\n", corr)?;
+        }
+
+        /*
+        let rbm = RBM::from_ising(&ising2D, beta);
+
+        let smb = SmatrixBuilder::construct_from_samples(&rbm, &smps);
+        let smat =  smb.get_smat();
+
+        
+        let eg = nala::SymmetricEigen::eigenvalues(smat);
+
+        let filename = format!("SMAT_{:03}.dat", (beta*100.0) as u32);
+        let mut file = File::create(filename).unwrap();
+        write!(&mut file, "{}\n", beta)?;
+        for v in eg.iter() {
+            write!(&mut file, "{}\n", v)?;
+        }
+        */
+    }
+
+    Ok(())
 }

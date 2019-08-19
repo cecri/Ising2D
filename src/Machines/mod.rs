@@ -46,6 +46,8 @@ impl Machine for RBM {
         self.n
     }
 
+
+
     fn get_dim(&self) -> u32 {
         self.n * self.m
     }
@@ -93,6 +95,37 @@ impl Machine for RBM {
         for i in 0..self.n {
             for j in 0..self.m {
                 res[(i*self.m + j) as usize] = f64::from(sigma[i as usize])*theta[j as usize].tanh();
+            }
+        }
+        res
+    }
+
+
+}
+
+impl RBM {
+    pub fn get_num_hidden(&self) -> u32 {
+        self.m
+    }
+    pub fn get_dim_full(&self) -> u32 {
+        self.n + self.m + self.n*self.m
+    }
+    pub fn partial_der_full(&self, sigma : &na::DVector<i8>)  -> na::DVector<f64> {
+        use na::DVector;
+        let s : DVector<f64> = na::convert_ref(sigma);
+        let mut res: DVector<f64> = DVector::zeros((self.n + self.m + self.n*self.m) as usize);
+        let theta = &self.weights*&s;
+        for i in 0..self.n {
+            res[i as usize] = f64::from(sigma[i as usize]);
+        }
+        for j in 0..self.m {
+            res[(self.n + j) as usize] = theta[j as usize].tanh();
+        }
+
+        for i in 0..self.n {
+            for j in 0..self.m {
+                let idx = i*self.m + j;
+                res[(self.n + self.m + idx) as usize] = f64::from(sigma[i as usize])*theta[j as usize].tanh();
             }
         }
         res

@@ -15,3 +15,14 @@ scoped_threadpool = "0.1.9"
 serde = "*"
 serde-pickle = "*"
 nalgebra-lapack = { version = "0.10.0", default-features = false, features = ["intel-mkl"] }
+pyo3 = { version = "0.8.0", features = ["extension-module"]}
+
+
+[[bin]]
+name = "Ising2D"
+
+[lib]
+name = "wolff"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+

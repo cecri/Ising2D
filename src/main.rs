@@ -177,8 +177,8 @@ fn main() -> Result<(), Box<dyn Error>>{
 
     
     let ising2D = Ising2D {
-        n1: 8,
-        n2: 8,
+        n1: 2,
+        n2: 2,
     };
 
 
@@ -196,14 +196,10 @@ fn main() -> Result<(), Box<dyn Error>>{
         let rbm = RBM::from_ising(&ising2D, beta);
         let n = rbm.get_num_visible() as usize;
         let m = rbm.get_num_hidden() as usize;
-        
-        eprintln!("Constructing S Matrix Start");
+
         let smb = SmatrixBuilder::construct_full_from_samples(&rbm, &smps);
         let smat =  smb.get_smat();
-        eprintln!("Constructing S Matrix Finished");
-        eprintln!("Calculating eigenvalues Start");
         let evs = nala::SymmetricEigen::eigenvalues(smat);
-        eprintln!("Calculating eigenvalues Finished");
 
         let filename = format!("EIGS_{:03}.dat", (beta*100.0 + 0.5) as u32);
         let mut file = File::create(filename).unwrap();

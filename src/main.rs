@@ -10,6 +10,7 @@ mod Ising;
 mod Machines;
 use std::error::Error;
 use Machines::{Machine, Utility, coeffs,RBM};
+use std::env;
 
 fn machine_exact_energy<T: Ising::Model, U: Machines::Machine>(ising: &T, rbm: &U) -> f64 {
     let cfs = coeffs(rbm, true);
@@ -174,21 +175,31 @@ fn main() -> Result<(), Box<dyn Error>>{
     use std::fs::File;
     use std::io::Write;
     use na::DVector;
+    
+    use serde_pickle::ser::to_writer;
 
+    let L = 10;
+    let N = L*L;
     
     let ising2D = Ising2D {
-        n1: 2,
-        n2: 2,
+        n1: L,
+        n2: L,
     };
 
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 2 {
+        eprintln!("Must be used with 1 argument");
+    }
 
-    //let betas = vec![0.01, 0.30, 0.44, 0.58, 0.65, 0.9];
-    //let betas = vec![2.0];
-    let nsmp: usize = 10000;
+    let bidx:usize = args[1].parse().unwrap();
 
-    let betas = itertools_num::linspace(0.1, 1.0, 91);
 
-    for beta in betas {
+    let nsmp: usize = (2*N*N) as usize;
+
+    let mut betas = itertools_num::linspace(0.1, 1.0, 91);
+    
+    let beta = betas.nth(bidx).unwrap();
+    {
         let smps = ising_sample(&ising2D, beta, nsmp);
 
         println!("beta: {:.3}", beta);
@@ -199,6 +210,12 @@ fn main() -> Result<(), Box<dyn Error>>{
 
         let smb = SmatrixBuilder::construct_full_from_samples(&rbm, &smps);
         let smat =  smb.get_smat();
+        
+        //let serialized = serde_pickle::to_value(&smat)?;
+        let filename = format!("SMAT_{:03}.dat", (beta*100.0 + 0.5) as u32);
+        let mut file = File::create(filename).unwrap();
+        serde_pickle::to_writer(&mut file,&smat,true)?;
+        /*
         let evs = nala::SymmetricEigen::eigenvalues(smat);
 
         let filename = format!("EIGS_{:03}.dat", (beta*100.0 + 0.5) as u32);
@@ -210,6 +227,7 @@ fn main() -> Result<(), Box<dyn Error>>{
         for v in evs.iter() {
             write!(&mut file, "{}\n", v)?;
         }
+        */
     }
 
     Ok(())

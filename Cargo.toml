@@ -8,8 +8,8 @@ edition = "2018"
 rand = "0.6"
 itertools = "0.8"
 itertools-num = "0.1"
-#nalgebra = { version = "0.18.0", features = ["serde-serialize"]}
-nalgebra = "0.18.0"
+nalgebra = { version = "0.18.0", features = ["serde-serialize"]}
+#nalgebra = "0.18.0"
 #rayon = "1.0"
 scoped_threadpool = "0.1.9"
 serde = "*"

@@ -46,8 +46,6 @@ impl Machine for RBM {
         self.n
     }
 
-
-
     fn get_dim(&self) -> u32 {
         self.n * self.m
     }

@@ -152,7 +152,6 @@ impl<'a, T: Model> WolffSampler<'a, T> {
         let mut cluster : HashSet<u32> = HashSet::new();
         let mut queue: VecDeque<u32> = VecDeque::new();
 
-
         let n = self.model.size();
         let idx_dist = Uniform::from(0..n);
         let p_dist : Uniform<f64> = Uniform::from(0.0..1.0);

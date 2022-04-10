@@ -1,8 +1,5 @@
 extern crate nalgebra as na;
 extern crate itertools;
-extern crate itertools_num;
-extern crate nalgebra_lapack as nala;
-extern crate scoped_threadpool;
 extern crate serde;
 extern crate serde_pickle;
 
@@ -10,6 +7,7 @@ mod Ising;
 mod Machines;
 use std::error::Error;
 use Machines::{Machine, Utility, coeffs,RBM};
+use nalgebra::linalg as la;
 
 fn machine_exact_energy<T: Ising::Model, U: Machines::Machine>(ising: &T, rbm: &U) -> f64 {
     let cfs = coeffs(rbm, true);
@@ -81,24 +79,17 @@ impl SmatrixBuilder {
     fn construct_from_samples<T: Machine + Sync>(machine: &T, samples: &Vec<Vec<i8> >) -> SmatrixBuilder {
         use na::{DMatrix, DVector};
         use std::ops::AddAssign;
-        use scoped_threadpool::Pool;
         use std::ptr::copy_nonoverlapping;
         
         let dim = machine.get_dim() as usize;
         let n_smp = samples.len();
         let mut gs: DMatrix<f64> = DMatrix::zeros(dim, n_smp);
         
-        let mut pool = Pool::new(4);
-        
-        pool.scoped(|scoped| {
-            for (i, mut col) in gs.column_iter_mut().enumerate(){
-                scoped.execute(move || {
-                    let sigma = na::DVector::<i8>::from_vec(samples[i].clone());
-                    let src = machine.partial_der(&sigma);
-                    col += src;
-                });
-            } //for
-        });
+        for (i, mut col) in gs.column_iter_mut().enumerate(){
+            let sigma = na::DVector::<i8>::from_vec(samples[i].clone());
+            let src = machine.partial_der(&sigma);
+            col += src;
+        } //for
 
         let mut g2 = &gs*gs.transpose();
         g2 /= f64::from(n_smp as u32);
@@ -110,25 +101,21 @@ impl SmatrixBuilder {
     }
     fn construct_full_from_samples(machine: &RBM, samples: &Vec<Vec<i8> >) -> SmatrixBuilder {
         use na::{DMatrix, DVector};
-        use std::ops::AddAssign;
-        use scoped_threadpool::Pool;
-        use std::ptr::copy_nonoverlapping;
+        use itertools::zip;
+        use rayon::prelude::*;
         
         let dim = machine.get_dim_full() as usize;
         let n_smp = samples.len();
-        let mut gs: DMatrix<f64> = DMatrix::zeros(dim, n_smp);
+        //let mut gs: DMatrix<f64> = DMatrix::zeros(dim, n_smp);
         
-        let mut pool = Pool::new(4);
-        
-        pool.scoped(|scoped| {
-            for (i, mut col) in gs.column_iter_mut().enumerate(){
-                scoped.execute(move || {
-                    let sigma = na::DVector::<i8>::from_vec(samples[i].clone());
-                    let src = machine.partial_der_full(&sigma);
-                    col += src;
-                });
-            } //for
-        });
+        let vec: Vec<na::DVector::<f64>> = (0..n_smp).into_par_iter().map(
+            |i| {
+                let sigma = na::DVector::<i8>::from_vec(samples[i].clone());
+                let src = machine.partial_der_full(&sigma);
+                src
+            }).collect();
+
+        let gs = DMatrix::from_columns(&vec);
 
         let mut g2 = &gs*gs.transpose();
         g2 /= f64::from(n_smp as u32);
@@ -155,10 +142,10 @@ fn ent_ee(n: usize, m: usize, vec: &na::DVector<f64>) -> f64 {
     let rho = &psi*psi.transpose();
 
     println!(r"Tr[\rho] = {}\n", rho.trace());
-    let lambdas = nala::SymmetricEigen::eigenvalues(rho);
+    let eigs = la::SymmetricEigen::new(rho);
     
     let mut res: f64 = 0.0;
-    for lambda in lambdas.into_iter() {
+    for lambda in eigs.eigenvalues.into_iter() {
         if *lambda < 1e-10 {
             continue;
         }
@@ -174,11 +161,11 @@ fn main() -> Result<(), Box<dyn Error>>{
     use std::fs::File;
     use std::io::Write;
     use na::DVector;
+    use itertools_num::linspace;
 
-    
     let ising2D = Ising2D {
-        n1: 2,
-        n2: 2,
+        n1: 4,
+        n2: 4,
     };
 
 
@@ -186,7 +173,7 @@ fn main() -> Result<(), Box<dyn Error>>{
     //let betas = vec![2.0];
     let nsmp: usize = 10000;
 
-    let betas = itertools_num::linspace(0.1, 1.0, 91);
+    let betas = itertools_num::linspace(0.1, 1.0, 11);
 
     for beta in betas {
         let smps = ising_sample(&ising2D, beta, nsmp);
@@ -198,8 +185,8 @@ fn main() -> Result<(), Box<dyn Error>>{
         let m = rbm.get_num_hidden() as usize;
 
         let smb = SmatrixBuilder::construct_full_from_samples(&rbm, &smps);
-        let smat =  smb.get_smat();
-        let evs = nala::SymmetricEigen::eigenvalues(smat);
+        let smat = smb.get_smat();
+        let symm_eigs = la::SymmetricEigen::new(smat);
 
         let filename = format!("EIGS_{:03}.dat", (beta*100.0 + 0.5) as u32);
         let mut file = File::create(filename).unwrap();
@@ -207,7 +194,7 @@ fn main() -> Result<(), Box<dyn Error>>{
         //let length = eigs.eigenvalues.len();
 
         write!(&mut file, "{}\n", beta)?;
-        for v in evs.iter() {
+        for v in symm_eigs.eigenvalues.iter() {
             write!(&mut file, "{}\n", v)?;
         }
     }
